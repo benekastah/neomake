@@ -67,9 +67,34 @@ function! neomake#utils#IsRunningWindows() abort
     return has('win32') || has('win64')
 endfunction
 
-" Get directory/path separator.
-function! neomake#utils#Slash() abort
-    return (!exists('+shellslash') || &shellslash) ? '/' : '\'
+if exists('+shellslash')
+    " Get directory/path separator.
+    function! neomake#utils#Slash() abort
+        return exists('+shellslash') && !&shellslash ? '\' : '/'
+        " Use the same separator as with tempname(). ??
+        " return exists('+shellslash') && !&shellslash && &shellcmdflag[0] !=# '-' ? '\' : '/'
+    endfunction
+
+    function! neomake#utils#tempname() abort
+        " Fix up special handling of &shellcmdflag[0] ==# '-'.
+        let r = tempname()
+        if !&shellslash && &shellcmdflag[0] ==# '-'
+            let r = tr(r, '/', '\')
+        endif
+        return r
+    endfunction
+else
+    function! neomake#utils#Slash() abort
+        return '/'
+    endfunction
+
+    function! neomake#utils#tempname() abort
+        return tempname()
+    endfunction
+endif
+
+function! neomake#utils#fname(...) abort
+    return join(a:000, neomake#utils#Slash())
 endfunction
 
 function! neomake#utils#Exists(exe) abort
@@ -92,7 +117,7 @@ function! s:maker_from_command._get_argv(jobinfo) abort dict
             call add(args, fname)
         endif
     endif
-    return neomake#compat#get_argv(self.exe, args, 1)
+    return [self.exe] + args
 endfunction
 
 " Create a maker object for a given command.
@@ -322,7 +347,8 @@ function! neomake#utils#ExpandArgs(args) abort
                 \ . '''\(\%(\\\@<!\\\)\@<!%\%(%\|\%(:[phtreS8.~]\)\+\|\ze\w\@!\)\)'', '
                 \ . '''\=(submatch(1) == "%%" ? "%" : expand(submatch(1)))'', '
                 \ . '''g'')')
-    let ret = map(ret, 'substitute(v:val, ''\v^\~\ze%(/|$)'', expand(''~''), ''g'')')
+    let home = escape(expand('~'), '\')
+    let ret = map(ret, 'substitute(v:val, ''\v^\~\ze%(/|$)'', home, ''g'')')
     return ret
 endfunction
 
@@ -461,7 +487,7 @@ endfunction
 function! neomake#utils#shellescape(arg) abort
     if a:arg =~# '^[A-Za-z0-9_/.=-]\+$'
         return a:arg
-    elseif &shell =~? 'cmd' || exists('+shellslash') && !&shellslash
+    elseif has('win32') && &shellcmdflag !~# '^-'
         return '"'.s:gsub(s:gsub(a:arg, '"', '""'), '\%', '"%"').'"'
     endif
     return shellescape(a:arg)
@@ -474,6 +500,10 @@ function! neomake#utils#get_buffer_lines(bufnr) abort
         if getbufvar(a:bufnr, '&endofline')
                     \ || (!getbufvar(a:bufnr, '&binary')
                     \     && (!exists('+fixendofline') || getbufvar(a:bufnr, '&fixendofline')))
+            " Add CR for ff=dos (Windows).
+            if &fileformat ==# 'dos' && !getbufvar(a:bufnr, '&binary')
+                call map(buflines, 'v:val . "\r"')
+            endif
             call add(buflines, '')
         endif
     endif

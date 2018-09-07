@@ -1,0 +1,209 @@
+---
+# Disabling building for AppVeyor. We are just testing things.
+build: false
+clone_depth: 10
+branches:
+  only:
+    - master
+skip_branch_with_pr: true
+
+environment:
+  PYTHON: "C:\\Python36-x64\\python"
+
+  matrix:
+    # Default shell.
+    - CONFIGURATION: "VIM"
+      TEST_SHELL: ""
+    - CONFIGURATION: "NEOVIM"
+      TEST_SHELL: ""
+
+    # Bash as shell.
+    - CONFIGURATION: "VIM"
+      TEST_SHELL: "C:/msys64/usr/bin/bash"
+      SHELL: "C:/msys64/usr/bin/bash"
+    - CONFIGURATION: "NEOVIM"
+      TEST_SHELL: "C:/msys64/usr/bin/bash"
+      SHELL: "C:/msys64/usr/bin/bash"
+
+# Cache the vim and vader directories between builds.
+# cache:
+#   - C:\vim -> .appveyor.yml
+#   - C:\projects\neomake\build\vim\plugins\vader -> .appveyor.yml
+cache:
+  - C:\vim
+  - C:\neovim
+  # - C:\projects\neomake\build\vim\plugins\vader
+
+init:
+  # Stop git from changing newlines
+  - git config --global core.autocrlf input
+
+install:
+  # Download and unpack Vim
+  - ps: >-
+      if ($env:CONFIGURATION -eq 'VIM') {
+        if (!(Test-Path -Path C:\vim)){
+          Write-Host "Downloading Vim"
+          Add-Type -A System.IO.Compression.FileSystem
+          Invoke-WebRequest ftp://ftp.vim.org/pub/vim/pc/vim81w32.zip `
+            -OutFile C:\vim.zip
+          [IO.Compression.ZipFile]::ExtractToDirectory('C:\vim.zip', 'C:\vim')
+          Invoke-WebRequest ftp://ftp.vim.org/pub/vim/pc/vim81rt.zip `
+            -OutFile C:\rt.zip
+          [IO.Compression.ZipFile]::ExtractToDirectory('C:\rt.zip', 'C:\vim')
+        }
+        $env:TEST_VIM = 'C:/vim/vim/vim81/vim.exe'
+      }
+  # Install Neovim
+  - ps: >-
+      if ($env:CONFIGURATION -eq 'NEOVIM') {
+        if (!(Test-Path -Path C:\neovim)){
+          Write-Host "Downloading Neovim"
+          Add-Type -A System.IO.Compression.FileSystem
+          Invoke-WebRequest https://github.com/neovim/neovim/releases/download/v0.3.1/nvim-win64.zip `
+            -OutFile C:\neovim.zip
+          [IO.Compression.ZipFile]::ExtractToDirectory('C:\neovim.zip', 'C:\neovim')
+        }
+        $env:TEST_VIM = 'C:/neovim/Neovim/bin/nvim.exe'
+      }
+  # Install Neovim-dev
+  - ps: >-
+      if ($env:CONFIGURATION -eq 'NEOVIM-DEV') {
+        if (!(Test-Path -Path C:\neovim-dev)){
+          Add-Type -A System.IO.Compression.FileSystem
+          Invoke-WebRequest https://github.com/neovim/neovim/releases/download/nightly/nvim-win64.zip `
+            -OutFile C:\neovim.zip
+          [IO.Compression.ZipFile]::ExtractToDirectory('C:\neovim.zip', 'C:\neovim-dev')
+        }
+      }
+  # Clone Vader and check out the commit we want
+  - ps: >-
+      if (!(Test-Path -Path C:\projects\neomake\build\vim\plugins\vader)){
+        git clone -q --depth=1 --branch=appveyor-integration https://github.com/blueyed/vader.vim C:\projects\neomake\build\vim\plugins\vader
+      }
+
+  # # Install covimerage
+  # - set PATH=C:\Users\appveyor\AppData\Roaming\Python\Python36\Scripts;%PATH%
+  # - "%PYTHON% -m pip install --user covimerage"
+
+test_script:
+  - cd C:\projects\neomake
+  - set NEOMAKE_TEST_NO_COLORSCHEME=1
+  - ps: |
+      $env:PATH = 'C:\msys64\usr\bin;' + $env:PATH
+
+  # Ok.
+  - ps: |
+      & bash -c "printf '%s\n' 1:1 1:2"
+      & bash -c "printf '%s\r\n' 2:1 2:2"
+
+  # bash: -c: line 0: unexpected EOF while looking for matching `''
+  # bash: -c: line 1: syntax error: unexpected end of file
+  # - cmd: bash -c "printf '%s\n' 3:1 3:2"
+
+  # XXX: Prints "s".
+  - ps: |
+      & bash -c "printf '%s\r\n' 4:1 4:2"
+
+  # Ellipsis.
+  - cmd: |
+      echo …
+      cmd /s /c echo …
+  - ps: |
+      & echo …
+      & echo "…"
+
+  - ps: |
+      echo $env:CONFIGURATION
+
+  - ps: |
+        & $env:TEST_VIM --version
+
+  # - ps: |
+  #     if ($env:CONFIGURATION -eq 'VIM') {
+  #       Write-Host "Vim: write to CON"
+  #       & $env:TEST_VIM -Es -c "call writefile(['1', '2'], 'CON')" -cq 2>&1 | %{ "$_" }
+  #       Write-Host "type CON"
+  #       type CON
+  #     } elseif ($env:CONFIGURATION -eq 'NEOVIM') {
+  #       Write-Host "Neovim: write to CON"
+  #       & $env:TEST_VIM --headless -c "call writefile(['1', '2'], 'CON')" -cq 2>&1 | %{ "$_" }
+  #       Write-Host "type CON"
+  #       type CON
+  #     }
+
+  - ps: |
+      if ($env:CONFIGURATION -eq 'VIM') {
+        Write-Host "Vim: test writing to stderr (verbose echon)"
+        & $env:TEST_VIM -Es -c 'verbose echon 1' -c 'verbose echon 2' -cq 2>&1 | %{ "$_" }
+        Write-Host "Vim: test writing to stderr (verbose echon, 2)"
+        & $env:TEST_VIM -Es -c 'verbose echon 12' -c 'verbose echon "3".nr2char(10)' -c 'verbose echon "4".nr2char(13).nr2char(10)' -c 'verbose echon "5"' -cq 2>&1 | %{ "$_" }
+
+        # Write-Host "Vim: ellipsis"
+        # Error detected while processing command line:
+        # E15: Invalid expression: à
+        # E15: Invalid expression: à
+        # & $env:TEST_VIM --noplugin -Nu tests/vim/vimrc -i NONE -Es -c 'verb echon "…"' -cq 2>&1 | %{ "$_" }
+
+        $env:TEST_VIM_ARGS = "-X --not-a-term -Es -Nu tests/vim/vimrc"
+      } elseif ($env:CONFIGURATION -eq 'NEOVIM') {
+        Write-Host "Neovim: write to stderr (chansend)"
+        & $env:TEST_VIM --headless -c "call chansend(v:stderr, 'foo')" -cq 2>&1 | %{ "$_" }
+
+        Write-Host "Vim: test writing to stderr (verbose echon)"
+        & $env:TEST_VIM -Es -c 'verbose echon 1' -c 'verbose echon 2' -cq 2>&1 | %{ "$_" }
+        Write-Host "Vim: test writing to stderr (verbose echon, 2)"
+        & $env:TEST_VIM -Es -c 'verbose echon 12' -c 'verbose echon "3".nr2char(10)' -c 'verbose echon "4".nr2char(13).nr2char(10)' -c 'verbose echon "5"' -cq 2>&1 | %{ "$_" }
+
+        Write-Host "Neovim: ellipsis 1"
+        # ΓÇª
+        & $env:TEST_VIM --headless -c "call chansend(v:stderr, '…')" -cq 2>&1 | %{ "$_" }
+
+        # Write-Host "Neovim: ellipsis 2"
+        # & $env:TEST_VIM -Es -c "verb echon '…'" -cq 2>&1 | %{ "$_" }
+
+        $env:TEST_VIM_ARGS = "--headless -Nu tests/vim/vimrc"
+      }
+      Write-Host "done"
+
+  # Use test_windows as smoke test.
+  # Avoid Makefile.
+  - cmd: |
+      %TEST_VIM% %TEST_VIM_ARGS% "+Vader! tests/test_windows.vader" >NUL
+  - cmd: make test TEST_VIM=%TEST_VIM% TEST_SHELL=%TEST_SHELL% VADER_ARGS=tests/test_windows.vader _REDIR_STDOUT=">/dev/null"
+
+  # XXX: hangs without any output on Vim.
+  # - cmd: |
+  #     %TEST_VIM% %TEST_VIM_ARGS% "+Vader! tests/all.vader"
+  - cmd: make test TEST_VIM=%TEST_VIM% TEST_SHELL=%TEST_SHELL% VADER_ARGS=tests/all.vader
+
+
+
+  # - ps: |
+  #     Write-Host "test_windows 1: direct (-Es)"
+  #     # System.Management.Automation.RemoteException
+  #     & $env:TEST_VIM -Es -Nu tests/vim/vimrc "+Vader! tests/test_windows.vader" 2>&1 | %{ "$_" }
+
+  # - ps: |
+  #     Write-Host "test_windows 2: make"
+  #     # XXX: extra newlines between Vader output lines with Vim
+  #     & make test TEST_VIM=$env:TEST_VIM VADER_ARGS=tests/test_windows.vader 2>&1 | %{ "$_" }
+
+  # - ps: |
+  #     # & make test TEST_VIM=$env:TEST_VIM VADER_ARGS=tests/test_windows.vader 2>&1 | %{ "$_" }
+  #
+  #     # & make test TEST_VIM=$env:TEST_VIM VADER_ARGS=tests/main.vader 2>&1 | %{ "$_" }
+  #
+  #     Get-ChildItem "tests/*.vader" | Foreach-Object {
+  #         if ($_.Name -ne "main.vader" -And $_.Name -ne "all.vader") {
+  #             & echo $_.Name
+  #             & make test TEST_VIM=$env:TEST_VIM VADER_ARGS="$_" 2>&1 | %{ "$_" }
+  #             if ($LastExitCode -ne 0) { $host.SetShouldExit($LastExitCode) }
+  #         }
+  #     }
+  #
+  #     Get-ChildItem "tests/isolated/*.vader" | Foreach-Object {
+  #         & echo $_.Name
+  #         & make test TEST_VIM=$env:TEST_VIM VADER_ARGS="$_" 2>&1 | %{ "$_" }
+  #         if ($LastExitCode -ne 0) { $host.SetShouldExit($LastExitCode) }
+  #     }

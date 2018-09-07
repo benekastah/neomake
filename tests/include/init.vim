@@ -112,25 +112,33 @@ function! RunNeomakeSh(...)
   NeomakeTestsWaitForFinishedJobs
 endfunction
 
-let s:tempname = tempname()
+let s:tmpbindir = ''
 
 function! g:NeomakeTestsCreateExe(name, ...)
   let lines = a:0 ? a:1 : ['#!/bin/sh']
   let path_separator = exists('+shellslash') ? ';' : ':'
-  let dir_separator = exists('+shellslash') ? '\' : '/'
-  let tmpbindir = s:tempname . dir_separator . 'neomake-vader-tests'
-  let exe = tmpbindir.dir_separator.a:name
-  if $PATH !~# tmpbindir . path_separator
-    if !isdirectory(tmpbindir)
-      call mkdir(tmpbindir, 'p', 0770)
+  let dir_separator = neomake#utils#Slash()
+  if empty(s:tmpbindir)
+    let s:tmpbindir = tempname() . dir_separator . 'neomake-vader-tests'
+  endif
+  if stridx($PATH, s:tmpbindir.path_separator) is -1
+    if !isdirectory(s:tmpbindir)
+      call mkdir(s:tmpbindir, 'p', 0770)
     endif
-    call g:NeomakeTestsSetPATH(tmpbindir . ':' . $PATH)
+    call g:NeomakeTestsSetPATH(s:tmpbindir.path_separator.$PATH)
+  endif
+  let exe = s:tmpbindir.dir_separator.a:name
+  if neomake#utils#IsRunningWindows()
+    " Windows needs an extension.
+    let exe .= '.CMD'
+    let lines = ['@echo off'] + lines
   endif
   call writefile(lines, exe)
   if exists('*setfperm')
+    " NOTE: does not work with vim from/on MSYS2.
     call setfperm(exe, 'rwxrwx---')
   else
-    " XXX: Windows support
+    " XXX: Windows support?!
     call system('/bin/chmod 770 '.shellescape(exe))
     Assert !v:shell_error, 'Got shell_error with chmod: '.v:shell_error
   endif
@@ -310,7 +318,12 @@ function! NeomakeAsyncTestsSetup()
 endfunction
 
 function! NeomakeTestsCommandMaker(name, cmd)
-  let maker = neomake#utils#MakerFromCommand(a:cmd)
+  let cmd = a:cmd
+  if &shell =~# 'cmd'
+    " Replace ";" with "&" for cmd.exe
+    let cmd = substitute(cmd, ';', '\&', 'g')
+  endif
+  let maker = neomake#utils#MakerFromCommand(cmd)
   return extend(maker, {
   \ 'name': a:name,
   \ 'errorformat': '%m',
@@ -346,7 +359,15 @@ let g:sleep_efm_maker = {
     \ 'errorformat': '%f:%l:%t:%m',
     \ 'append_file': 0,
     \ }
-let g:sleep_maker = NeomakeTestsCommandMaker('sleep-maker', 'sleep .05; echo slept')
+
+" sleep-maker: sleep for a minimal time and echo "slept".
+if neomake#utils#IsRunningWindows()
+  let g:sleep_maker = NeomakeTestsCommandMaker('sleep-maker', 'timeout 1 && echo slept')
+else
+  let g:sleep_maker = NeomakeTestsCommandMaker('sleep-maker', 'sleep .05; echo slept')
+endif
+lockvar g:sleep_maker
+
 let g:error_maker = NeomakeTestsCommandMaker('error-maker', 'echo error; false')
 let g:error_maker.errorformat = '%E%m'
 function! g:error_maker.postprocess(entry) abort
@@ -356,12 +377,23 @@ endfunction
 let g:success_maker = NeomakeTestsCommandMaker('success-maker', 'echo success')
 let g:success_maker.errorformat = '%-Gsuccess'
 let g:true_maker = NeomakeTestsCommandMaker('true-maker', 'true')
+lockvar g:true_maker
 let g:entry_maker = {'name': 'entry_maker'}
 function! g:entry_maker.get_list_entries(...) abort
   return get(g:, 'neomake_test_getlistentries', [
   \   {'text': 'error', 'lnum': 1, 'type': 'E'}])
 endfunction
 let g:doesnotexist_maker = {'exe': 'doesnotexist'}
+
+" A maker to print the current working directory and its args.
+if neomake#utils#IsRunningWindows()
+  let g:pwd_maker = NeomakeTestsCommandMaker('pwd', 'echo %%CD%%&& echo')
+else
+  let g:pwd_maker = NeomakeTestsCommandMaker('pwd', 'pwd && ls')
+endif
+let g:pwd_maker.errorformat = '%m'
+let g:pwd_maker.append_file = 1
+lockvar g:pwd_maker
 
 " A maker that generates incrementing errors.
 let g:neomake_test_inc_maker_counter = 0
@@ -429,13 +461,16 @@ function! NeomakeTestsFixtureMaker(func, fname) abort
 
   let maker = call(a:func, [])
   let maker.exe = &shell
-  let maker.args = [&shellcmdflag, printf(
-        \ 'cat %s; cat %s >&2; exit %d',
-        \ fnameescape(stdout), fnameescape(stderr), exitcode)]
+  let cmd = &shell =~? 'cmd' ? 'type' : 'cat'
+  let maker.args = split(&shellcmdflag) + [printf(
+        \ '%s %s && %s %s >&2 && exit %d',
+        \ cmd, fnameescape(stdout),
+        \ cmd, fnameescape(stderr), exitcode)]
   let maker.name = printf('%s-fixture', substitute(a:func, '^.*#', '', ''))
 
   " Massage current buffer.
   if get(b:, 'neomake_tests_massage_buffer', 1)
+    let maker.append_file = 0
     " Write the input file to the temporary root.
     let test_fname = s:fixture_root . '/' . a:fname
     let test_fname_dir = fnamemodify(test_fname, ':h')
@@ -456,6 +491,8 @@ function! s:After()
   endif
 
   Restore
+  let s:saved_path = 0
+  let s:tmpbindir = ''
   unlet! g:expected  " for old Vim with Vader, that does not wrap tests in a function.
 
   let errors = g:neomake_test_errors
@@ -492,10 +529,20 @@ function! s:After()
   if !empty(make_info)
     call add(errors, 'make_info is not empty: '.string(make_info))
     try
+      Log 'cancelling all makes'
       call neomake#CancelAllMakes(1)
     catch
-      call add(errors, v:exception)
+      call add(errors, 'Error during CancelAllMakes: '.v:exception)
     endtry
+
+    " Ensure that make_info gets emptied.
+    let neomake_status = neomake#GetStatus()
+    Log 'neomake_status: '.string(neomake_status)
+    let make_info = neomake_status.make_info
+    if !empty(make_info)
+        call add(errors, printf('CancelAllMakes did not clean make_info: %s.', make_info))
+        let neomake_status.make_info = {}
+    endif
   endif
   let actions = filter(copy(status.action_queue), '!empty(v:val)')
   if !empty(actions)
@@ -523,7 +570,7 @@ function! s:After()
       \ "[bufname(winbufnr(v:val)), getbufvar(winbufnr(v:val), '&bt')]"))
     try
       for b in neomake#compat#uniq(sort(tabpagebuflist()))
-        if bufname(b) !=# '[Vader-workbench]'
+        if bufname(b) !=# g:neomake_test_vader_bufname
           exe 'bwipe!' b
         endif
       endfor
@@ -535,7 +582,7 @@ function! s:After()
       Log "Error while cleaning windows: ".v:exception.' (in '.v:throwpoint.').'
     endtry
     call add(errors, error)
-  elseif bufname(winbufnr(1)) !=# '[Vader-workbench]'
+  elseif bufname(winbufnr(1)) !=# g:neomake_test_vader_bufname
     call add(errors, 'Vader-workbench has been renamed: '.bufname(winbufnr(1)))
   endif
 
@@ -588,12 +635,8 @@ function! s:After()
   endif
 
   if !empty(errors)
-    if get(g:, 'vader_case_ok', 1)
-      call map(errors, "printf('%d. %s', v:key+1, v:val)")
-      throw len(errors)." error(s) in teardown:\n".join(errors, "\n")
-    else
-      Log printf('NOTE: %d error(s) in teardown.', len(errors))
-    endif
+    call map(errors, "printf('%d. %s', v:key+1, v:val)")
+    throw len(errors)." error(s) in teardown:\n".join(errors, "\n")
   endif
 endfunction
 command! NeomakeTestsGlobalAfter call s:After()

@@ -141,6 +141,7 @@ function! neomake#compat#systemlist(cmd) abort
         " @vimlint(EVL108, 1)
         if !has('nvim-0.2.0')
             try
+                Log 'systemlist: nvim: using systemlist: '.string(a:cmd)
                 return systemlist(a:cmd)
             catch /^Vim\%((\a\+)\)\=:E902/
                 return ''
@@ -156,8 +157,10 @@ function! neomake#compat#systemlist(cmd) abort
         let cmd = a:cmd
     endif
     if exists('*systemlist')
+        Log 'systemlist: using systemlist: '.string(cmd)
         return systemlist(cmd)
     endif
+    Log 'systemlist: using system: '.string(cmd)
     return split(system(cmd), '\n')
 endfunction
 
@@ -175,48 +178,81 @@ function! neomake#compat#glob_list(pattern) abort
     return glob(a:pattern, 1, 1)
 endfunction
 
-if neomake#utils#IsRunningWindows()
+if neomake#utils#IsRunningWindows() && neomake#has_async_support()
     " Windows needs a shell to handle PATH/%PATHEXT% etc.
-    function! neomake#compat#get_argv(exe, args, args_is_list) abort
-        let prefix = &shell.' '.&shellcmdflag.' '
-        if a:args_is_list
-            if a:exe ==# &shell && get(a:args, 0) ==# &shellcmdflag
-                " Remove already existing &shell/&shellcmdflag from e.g. NeomakeSh.
-                let argv = join(a:args[1:])
-            else
-                let argv = join(map(copy([a:exe] + a:args), 'neomake#utils#shellescape(v:val)'))
+    if has('nvim')
+        " Neovim: use a list, but prefix with shell.
+        function! neomake#compat#massage_argv(argv) abort
+            call neomake#log#debug('neomake#compat#massage_argv: '.string(a:argv).'.')
+            let shell_argv = split(&shell) + split(&shellcmdflag)
+            let len_shell_prefix = len(shell_argv)
+
+            if type(a:argv) == type([])
+                if a:argv[0:len_shell_prefix-1] == shell_argv
+                    " Already prefixed with shell, e.g. via
+                    " neomake#utils#MakerFromCommand.
+                    call neomake#log#debug(printf('neomake#compat#massage_argv (1): => %s', shell_argv + [join(a:argv[len_shell_prefix :])]))
+                    return shell_argv + [join(a:argv[len_shell_prefix :])]
+                endif
+                let ret = join(map(a:argv, 'neomake#utils#shellescape(v:val)'))
+                call neomake#log#debug(printf('neomake#compat#massage_argv (2): => %s', shell_argv + [ret]))
+                return shell_argv + [ret]
             endif
-        else
-            let argv = a:exe . (empty(a:args) ? '' : ' '.a:args)
-            if argv[0:len(prefix)-1] ==# prefix
-                return argv
+            call neomake#log#debug(printf('neomake#compat#massage_argv (3): => %s', shell_argv + [a:argv]))
+            return shell_argv + [a:argv]
+        endfunction
+    else
+        function! neomake#compat#massage_argv(argv) abort
+            call neomake#log#debug('neomake#compat#massage_argv: '.string(a:argv).'.')
+            let prefix = &shell.' '.&shellcmdflag.' '
+            if type(a:argv) == type([])
+                let shell_argv = split(&shell) + split(&shellcmdflag)
+                let len_shell_prefix = len(shell_argv)
+
+                let argv = a:argv
+                if argv[0:len_shell_prefix-1] == shell_argv
+                    " Already prefixed with shell, e.g. via
+                    " neomake#utils#MakerFromCommand.
+                    let ret = join(argv[len_shell_prefix :])
+                else
+                    let ret = join(map(argv, 'neomake#utils#shellescape(v:val)'))
+                endif
+                if &shell !~? 'cmd'
+                  let ret = neomake#utils#shellescape(ret)
+                endif
+                let ret = prefix.ret
+                call neomake#log#debug('neomake#compat#massage_argv (1): => '.ret.'.')
+                return ret
+            elseif a:argv[0:len(prefix)-1] ==# prefix
+                call neomake#log#debug('neomake#compat#massage_argv (2): => '.a:argv.'.')
+                return a:argv
+            elseif &shell !~? 'cmd'
+                call neomake#log#debug('neomake#compat#massage_argv (3): => '.prefix.a:argv.'.')
+                return prefix.neomake#utils#shellescape(a:argv)
             endif
-        endif
-        return prefix.argv
-    endfunction
+            call neomake#log#debug('neomake#compat#massage_argv (4): => '.prefix.a:argv.'.')
+            return prefix.a:argv
+        endfunction
+    endif
 elseif has('nvim')
-    function! neomake#compat#get_argv(exe, args, args_is_list) abort
-        if a:args_is_list
-            return [a:exe] + a:args
-        endif
-        return a:exe . (empty(a:args) ? '' : ' '.a:args)
+    function! neomake#compat#massage_argv(argv) abort
+        return a:argv
     endfunction
 elseif neomake#has_async_support()  " Vim-async.
-    function! neomake#compat#get_argv(exe, args, args_is_list) abort
-        if a:args_is_list
-            return [a:exe] + a:args
+    function! neomake#compat#massage_argv(argv) abort
+        if type(a:argv) == type([])
+            return a:argv
         endif
         " Use a shell to handle argv properly (Vim splits at spaces).
-        let argv = a:exe . (empty(a:args) ? '' : ' '.a:args)
-        return [&shell, &shellcmdflag, argv]
+        return [&shell, &shellcmdflag, a:argv]
     endfunction
 else
     " Vim (synchronously), via system().
-    function! neomake#compat#get_argv(exe, args, args_is_list) abort
-        if a:args_is_list
-            return join(map(copy([a:exe] + a:args), 'neomake#utils#shellescape(v:val)'))
+    function! neomake#compat#massage_argv(argv) abort
+        if type(a:argv) == type([])
+            return join(map(copy(a:argv), 'neomake#utils#shellescape(v:val)'))
         endif
-        return a:exe . (empty(a:args) ? '' : ' '.a:args)
+        return a:argv
     endfunction
 endif
 

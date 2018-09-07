@@ -103,18 +103,22 @@ Execute (:verb NeomakeInfo displays extra info):
   endfor
 
 Execute (NeomakeInfo! copies to clipboard):
+  " XXX: flaky on AppVeyor/neovim?! ('clipboard: failed to execute: win32yank -i --crlf')
+  call NeomakeTestsSetVimMessagesMarker()
   try
     let save_reg = getreg('+')
+    echom 'saved reg'
   catch
     NeomakeTestsSkip 'Clipboard is not available: '.v:exception
     return
   endtry
 
-  call NeomakeTestsSetVimMessagesMarker()
   let restore = 1
   try
     verbose NeomakeInfo!
+    echom 'getting reg'
     let info = split(getreg('+'), '\n')
+    echom 'got reg'
     if empty(info)
       let restore = 0
       AssertNeomakeMessage "Could not set clipboard: Vim(call):E354: Invalid register name: '+'.", 0
@@ -122,7 +126,9 @@ Execute (NeomakeInfo! copies to clipboard):
     endif
   finally
     if restore
+      echom 'restore reg'
       call setreg('+', save_reg, 'l')
+      echom 'restored reg'
     endif
   endtry
   let idx = -1
@@ -136,9 +142,10 @@ Execute (NeomakeInfo! copies to clipboard):
     let idx = i
   endfor
 
-  let messages_lines = split(neomake#utils#redir('messages'), "\n")
   AssertEqual NeomakeTestsGetVimMessages(), [
-  \ 'Copied Neomake info to clipboard ("+).']
+  \ 'saved reg',
+  \ 'Copied Neomake info to clipboard ("+).',
+  \ 'getting reg', 'got reg', 'restore reg', 'restored reg']
 
 Execute (NeomakeInfo displays new-style config):
   Save g:neomake

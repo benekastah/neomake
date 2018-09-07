@@ -2,7 +2,7 @@ version: 2
 
 common: &common
   docker:
-    - image: neomake/vims-for-tests:30@sha256:6d33736debcb26f0e212ffad5be3199da453be8157a05b872cefc5123fd70f95
+    - image: neomake/vims-for-tests:31@sha256:aca526214aa696ad49048e31ff9b7788f7185a67a7cef33ac7c220c98d9bbcbe
   working_directory: ~/repo
   steps:
     - checkout
@@ -59,11 +59,7 @@ workflows:
   version: 2
   test:
     jobs:
-      - nvim-031
-      - nvim-017
-      - vim-81
-      - vim-80
-      - vim-74-xenial
-      - vim-74-trusty
-      - vim-73
-      - checkqa
+      # - nvim-031
+      # - nvim-017
+      # - vim-81
+      # - vim-73

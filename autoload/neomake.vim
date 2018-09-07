@@ -324,7 +324,7 @@ function! s:MakeJob(make_id, options) abort
             throw printf("Neomake: %s: could not change to maker's cwd (%s): %s.",
                         \ maker.name, jobinfo.cd_from_setting, cd_error)
         endif
-        let jobinfo.argv = maker._get_argv(jobinfo)
+        let jobinfo.argv = jobinfo.get_argv()
 
         call neomake#utils#hook('NeomakeJobInit', {'jobinfo': jobinfo})
 
@@ -616,6 +616,7 @@ function! s:command_maker_base._get_fname_for_buffer(jobinfo) abort
             endif
             let used_for = 'unreadable'
         else
+            " XXX: '~' gets expanded to $HOME here on MSYS2 with Windows Vim.
             let bufname = fnamemodify(bufname, ':.')
             let used_for = ''
         endif
@@ -717,10 +718,11 @@ function! s:command_maker_base._get_argv(jobinfo) abort dict
     elseif !empty(filename)
         let args = copy(self.args)
         let args .= (empty(args) ? '' : ' ').neomake#utils#shellescape(filename)
+        return self.exe . ' ' . args
     else
-        let args = self.args
+        return self.exe . ' ' . self.args
     endif
-    return neomake#compat#get_argv(self.exe, args, args_is_list)
+    return [self.exe] + args
 endfunction
 
 function! s:GetMakerForFiletype(ft, maker_name) abort
@@ -1593,7 +1595,7 @@ function! s:handle_locqf_list_for_finished_jobs(make_info) abort
                             \ [a:make_info] + a:000])
             endif
             let mode = neomake#compat#get_mode()
-            if index(['n', 'i'], mode) == -1
+            if index(['n', 'i', 'cv', 'ce'], mode) == -1  " 'cv' is used in tests (-Es), 'ce' is '-es'.
                 call neomake#log#debug(printf(
                             \ 'Postponing final location list handling for mode "%s".', mode),
                             \ a:make_info.options)
@@ -2106,7 +2108,7 @@ function! s:need_to_postpone_output_processing(jobinfo) abort
         return ['CompleteDone']
     endif
     let mode = neomake#compat#get_mode()
-    if index(['n', 'i'], mode) == -1
+    if index(['n', 'i', 'cv', 'ce'], mode) == -1  " 'cv' is used in tests (-Es), 'ce' is '-es'.
         call neomake#log#debug('Not processing output for mode "'.mode.'".', a:jobinfo)
         return ['BufEnter', 'WinEnter', 'InsertLeave', 'CursorHold', 'CursorHoldI']
     endif
@@ -2648,6 +2650,7 @@ function! neomake#map_makers(makers, ft, auto_enabled) abort
             continue
         endtry
         call add(makers, m)
+        unlet maker  " for old Vim (when using dicts and strings).
     endfor
     if !empty(errors)
         let log_context = get(get(s:make_info, s:make_id, {}), 'options', {})

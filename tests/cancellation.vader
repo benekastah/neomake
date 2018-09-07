@@ -72,7 +72,7 @@ Execute (neomake#CancelJobs! removes canceled jobs):
     NeomakeCancelJobs!
     AssertNeomakeMessage 'Cancelling 2 jobs.', 3
     AssertNeomakeMessage 'Job was canceled already.', 2, jobinfos[0]
-    AssertNeomakeMessage '\v^Stopping job: .+\.$', 3, jobinfos[1]
+    AssertNeomakeMessage '\v^Stopping job: .+\.$', 3, jobinfos[1], {'ignore_order': 1}
     AssertNeomakeMessage 'Cleaning jobinfo.', 3, jobinfos[1]
 
     NeomakeTestsWaitForMessage '\m^exit: job not found'
@@ -124,13 +124,18 @@ Execute (neomake#CancelJob! with invalid job):
   endif
 
 Execute (neomake#CancelJob with trapped TERM):
-  if NeomakeAsyncTestsSetup()
+  if neomake#utils#IsRunningWindows()
+    " Trapping SIGTERM does not appear to work on Windows/AppVeyor.
+    NeomakeTestsSkip 'not on Windows.'
+  elseif !neomake#has_async_support()
+    NeomakeTestsSkip 'no async support.'
+  else
     let trap_sh = fnamemodify(g:vader_file, ':p:h').'/helpers/trap.sh'
     let job_id = neomake#ShCommand(1, trap_sh)
     let jobinfo = neomake#GetJob(job_id)
 
     " Ensure the script is running.
-    NeomakeTestsWaitForMessage '\vstdout: .*: \[''Started: (\d+)''', 3, jobinfo
+    NeomakeTestsWaitForMessage '\vstdout: .*''Started: (\d+)''', 3, jobinfo
     let pid = g:neomake_test_matchlist[1]
 
     AssertEqual neomake#CancelJob(job_id), 1
@@ -149,7 +154,9 @@ Execute (neomake#CancelJob with trapped TERM):
 
 Execute (neomake#CancelMake stops all jobs):
   if NeomakeAsyncTestsSetup()
-    let jobinfos = neomake#Make({'file_mode': 0, 'enabled_makers': [g:sleep_maker, g:sleep_maker]})
+    " NOTE: sleep 0.05 might be too short on MSYS2/Virtualbox.
+    let maker = NeomakeTestsCommandMaker('sleep-maker', 'sleep .1 && echo slept')
+    let jobinfos = neomake#Make({'file_mode': 0, 'enabled_makers': [maker, maker]})
     let make_id = neomake#GetStatus().last_make_id
     AssertEqual neomake#CancelMake(make_id), 1
     NeomakeTestsWaitForFinishedJobs

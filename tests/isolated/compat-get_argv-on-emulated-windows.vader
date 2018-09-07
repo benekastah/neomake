@@ -9,25 +9,131 @@ Execute (neomake#compat#get_argv on (emulated) Windows):
   endfunction
   runtime autoload/neomake/compat.vim
 
-  let out = neomake#compat#get_argv('sh', ['-c', 'echo 1'], 1)
-  AssertEqual out, 'cmd.exe /c sh -c "echo 1"'
+  let out = neomake#compat#massage_argv(['sh', '-c', 'echo 1'])
+  if has('nvim')
+    AssertEqual out, ['cmd.exe', '/c', 'sh -c ''echo 1''']
+  else
+    AssertEqual out, 'cmd.exe /c sh -c "echo 1"'
+  endif
 
   " Does not get wrapped in shell twice.
-  let out = neomake#compat#get_argv('cmd.exe', ['/c', 'echo 1'], 1)
-  AssertEqual out, 'cmd.exe /c echo 1'
-  let out = neomake#compat#get_argv('cmd.exe', ['/c', 'echo', '1'], 1)
-  AssertEqual out, 'cmd.exe /c echo 1'
-  let out = neomake#compat#get_argv('cmd.exe', ['/c', 'echo "1 1"'], 1)
-  AssertEqual out, 'cmd.exe /c echo "1 1"'
-  let out = neomake#compat#get_argv('cmd.exe', ['/c', 'echo', '"1 1"'], 1)
-  AssertEqual out, 'cmd.exe /c echo "1 1"'
+  let out = neomake#compat#massage_argv(['cmd.exe', '/c', 'echo 1'])
+  if has('nvim')
+    AssertEqual out, ['cmd.exe', '/c', 'echo 1']
+  else
+    AssertEqual out, 'cmd.exe /c echo 1'
+  endif
+
+  let out = neomake#compat#massage_argv(['echo 1'])
+  if has('nvim')
+    AssertEqual out, ['cmd.exe', '/c', '''echo 1''']
+  else
+    AssertEqual out, 'cmd.exe /c "echo 1"'
+  endif
+
+  let out = neomake#compat#massage_argv('echo 1')
+  " XXX: ok?
+  if has('nvim')
+    AssertEqual out, ['cmd.exe', '/c', 'echo 1']
+  else
+    AssertEqual out, 'cmd.exe /c echo 1'
+  endif
+
+  let out = neomake#compat#massage_argv('cmd.exe /c echo 1')
+  if has('nvim')
+    " NOTE: wrapped in shell again, should be ok.
+    AssertEqual out, ['cmd.exe', '/c', 'cmd.exe /c echo 1']
+  else
+    AssertEqual out, 'cmd.exe /c echo 1'
+  endif
+
+  " XXX: ok?"
+  let out = neomake#compat#massage_argv(['cmd.exe', '/c', 'echo "1 1"'])
+  if has('nvim')
+    AssertEqual out, ['cmd.exe', '/c', 'echo "1 1"']
+  else
+    AssertEqual out, 'cmd.exe /c echo "1 1"'
+  endif
+
+  " XXX: ok?"
+  let out = neomake#compat#massage_argv(['cmd.exe', '/c', 'echo', '"1 1"'])
+  if has('nvim')
+    AssertEqual out, ['cmd.exe', '/c', 'echo "1 1"']
+  else
+    AssertEqual out, 'cmd.exe /c echo "1 1"'
+  endif
 
   " Handled correctly with MakerFromCommand/NeomakeSh.
   let maker = neomake#utils#MakerFromCommand('echo "1 2"')
   let maker = neomake#GetMaker(maker)
   let jobinfo = NeomakeTestsFakeJobinfo()
   let jobinfo.file_mode = 0
-  AssertEqual maker._get_argv(jobinfo), 'cmd.exe /c echo "1 2"'
+  let jobinfo.maker = maker
+  if has('nvim')
+    AssertEqual maker._get_argv(jobinfo), ['cmd.exe', '/c', 'echo "1 2"']
+    " XXX: ok?"
+    AssertEqual jobinfo.get_argv(), ['cmd.exe', '/c', 'echo "1 2"']
+  else
+    AssertEqual maker._get_argv(jobinfo), ['cmd.exe', '/c', 'echo "1 2"']
+    " XXX: ok?"
+    AssertEqual jobinfo.get_argv(), 'cmd.exe /c echo "1 2"'
+  endif
+
+  let out = neomake#compat#massage_argv(['echo', 'a filename with spaces'])
+  if has('nvim')
+    AssertEqual out, ['cmd.exe', '/c', 'echo ''a filename with spaces''']
+  else
+    AssertEqual out, 'cmd.exe /c echo "a filename with spaces"'
+  endif
+
+Execute (neomake#compat#get_argv on (emulated) Windows (bash)):
+  Save &shell, &shellcmdflag
+  set shell=bash.exe
+  set shellcmdflag=-c
+  if exists('+shellslash')
+    Save &shellslash
+    set shellslash
+  endif
+  let out = neomake#compat#massage_argv(['printf', 'foo bar'])
+  if has('nvim')
+    AssertEqual out, ['bash.exe', '-c', 'printf ''foo bar''']
+  else
+    AssertEqual out, 'bash.exe -c "printf ""foo bar"""'
+  endif
+
+  let out = neomake#compat#massage_argv(['bash.exe', '-c', 'echo 1; echo 2'])
+  if has('nvim')
+    AssertEqual out, ['bash.exe', '-c', 'echo 1; echo 2']
+  else
+    AssertEqual out, 'bash.exe -c "echo 1; echo 2"'
+  endif
+
+  let out = neomake#compat#massage_argv(['echo 1'])
+  if has('nvim')
+    AssertEqual out, ['bash.exe', '-c', '''echo 1''']
+  else
+    AssertEqual out, 'bash.exe -c """echo 1"""'
+  endif
+
+Execute (neomake#compat#get_argv on (emulated) Windows (bash, no shellslash)):
+  if !exists('+shellslash')
+    NeomakeTestsSkip 'only with +shellslash.'
+  else
+    Save &shell, &shellcmdflag, &shellslash
+    set shell=bash.exe
+    set shellcmdflag=-c
+    set noshellslash
+    let out = neomake#compat#massage_argv(['printf', 'foo bar'])
+    " XXX: Will not work as expected, but is the current behavior!
+    AssertEqual out, 'bash.exe -c "printf ""foo bar"""'
+
+    let out = neomake#compat#massage_argv(['bash.exe', '-c', 'echo 1; echo 2'])
+    AssertEqual out, 'bash.exe -c "echo 1; echo 2"'
+
+    let out = neomake#compat#massage_argv(['echo 1'])
+    " XXX: Will not work as expected, but is the current behavior!
+    AssertEqual out, 'bash.exe -c """echo 1"""'
+  endif
 
 Execute (neomake#compat#dev_null on (emulated) Windows):
   AssertEqual g:neomake#compat#dev_null, 'NUL'

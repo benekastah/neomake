@@ -1,14 +1,13 @@
 # Do not let mess "cd" with user-defined paths.
 CDPATH:=
 
-bash=$(shell command -v bash 2>/dev/null)
-TEST_SHELL:=$(bash)
-ifeq ($(TEST_SHELL),)
-  $(error Could not determine TEST_SHELL (defaults to bash))
-endif
-# This is expected in tests.
-TEST_VIM_PREFIX:=SHELL=$(TEST_SHELL)
+bash:=$(shell command -v bash 2>/dev/null)
 SHELL:=$(bash) -o pipefail
+
+TEST_SHELL:=$(bash)
+ifneq ($(TEST_SHELL),)
+  TEST_VIM_PREFIX:=SHELL=$(TEST_SHELL)
+endif
 
 # Use nvim if it is installed, otherwise vim.
 ifeq ($(TEST_VIM),)
@@ -32,7 +31,7 @@ NEOMAKE_TESTS_DEP_PLUGINS_DIR?=build/vim/plugins
 TESTS_VADER_DIR:=$(NEOMAKE_TESTS_DEP_PLUGINS_DIR)/vader
 $(TESTS_VADER_DIR):
 	mkdir -p $(dir $@)
-	git clone -q --depth=1 -b display-source-with-exceptions https://github.com/blueyed/vader.vim $@
+	git clone -q --depth=1 -b appveyor-integration https://github.com/blueyed/vader.vim $@
 TESTS_FUGITIVE_DIR:=$(NEOMAKE_TESTS_DEP_PLUGINS_DIR)/vim-fugitive
 $(TESTS_FUGITIVE_DIR):
 	mkdir -p $(dir $@)
@@ -59,7 +58,6 @@ testvimx: testvim
 # Set Neovim logfile destination to prevent `.nvimlog` being created.
 testnvim: export NVIM_LOG_FILE:=/dev/stderr
 testnvim: TEST_VIM:=nvim
-testnvim: TEST_VIM_PREFIX+=VADER_OUTPUT_FILE=/dev/stderr
 testnvim: | build/vim-test-home $(DEP_PLUGINS)
 	$(call func-run-vim)
 
@@ -86,12 +84,22 @@ TEST_VIM_PREFIX+=HOME=$(CURDIR)/build/vim-test-home
 # > Vim: Finished.
 # For Vim `-s /dev/null` is used to skip the 2s delay with warning
 # "Vim: Warning: Output is not to a terminal".
+ifneq ($(_REDIR_STDOUT),)
+  ifneq ($(IS_NEOVIM),)
+    VIM_OUTPUT_FLAGS=--headless
+  else
+    VIM_OUTPUT_FLAGS=-X -s /dev/null
+    ifeq ($(OS),Windows_NT)
+      VIM_OUTPUT_FLAGS+=-Es
+    endif
+  endif
+endif
 COVERAGE_FILE:=.coverage_covimerage
 _COVIMERAGE=$(if $(filter-out 0,$(NEOMAKE_DO_COVERAGE)),covimerage run --data-file $(COVERAGE_FILE) --append --no-report ,)
 define func-run-vim
 	$(info Using: $(shell $(TEST_VIM_PREFIX) "$(TEST_VIM)" --version | head -n2))
 	$(_COVIMERAGE)$(if $(TEST_VIM_PREFIX),env $(TEST_VIM_PREFIX) ,)"$(TEST_VIM)" \
-	  $(if $(IS_NEOVIM),$(if $(_REDIR_STDOUT),--headless,),-X $(if $(_REDIR_STDOUT),-s /dev/null,)) \
+	  $(VIM_OUTPUT_FLAGS) \
 	  --noplugin -Nu $(TEST_VIMRC) -i NONE $(VIM_ARGS) $(_REDIR_STDOUT)
 endef
 
@@ -178,11 +186,12 @@ vimhelplint: | $(if $(VIMHELPLINT_DIR),,build/vimhelplint)
 
 # Run tests in dockerized Vims.
 DOCKER_REPO:=neomake/vims-for-tests
-DOCKER_TAG:=30
+DOCKER_TAG:=31
 NEOMAKE_DOCKER_IMAGE?=
 DOCKER_IMAGE:=$(if $(NEOMAKE_DOCKER_IMAGE),$(NEOMAKE_DOCKER_IMAGE),$(DOCKER_REPO):$(DOCKER_TAG))
 DOCKER_STREAMS:=-ti
 DOCKER=docker run $(DOCKER_STREAMS) --rm \
+    -v $(abspath $(TESTS_VADER_DIR)):/neomake-deps/vader \
     -v $(PWD):/testplugin \
     -w /testplugin \
     -e NEOMAKE_TEST_NO_COLORSCHEME \

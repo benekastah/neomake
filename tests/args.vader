@@ -2,15 +2,15 @@ Include: include/setup.vader
 
 Execute (maker.args as list gets escaped):
   let maker = {
-        \ 'exe': '/usr/bin/printf',
+        \ 'exe': 'printf',
         \ 'args': ['%s\n', '1', '2', '3a 3b'],
         \ 'errorformat': '%f: %m',
         \ 'mapexpr': 'expand("%:p") . ": " . v:val',
         \ }
 
-  let fname = 'tests/fixtures/a filename with spaces'
   new
-  edit tests/fixtures/a\ filename\ with\ spaces
+  let fname = neomake#utils#fname('tests', 'fixtures', 'a filename with spaces')
+  exe 'edit '.fnameescape(fname)
   let fname = bufname('%')
 
   call neomake#Make(1, [maker])
@@ -21,16 +21,15 @@ Execute (maker.args as list gets escaped):
 
 Execute (maker.args as string gets not escaped):
   let maker = {
-        \ 'exe': '/usr/bin/printf',
+        \ 'exe': 'printf',
         \ 'args': "'%s\\n' 1 2 '3a 3b' 4",
         \ 'errorformat': '%f: %m',
         \ 'mapexpr': 'expand("%:p") . ": " . v:val',
         \ }
 
-  let fname = 'tests/fixtures/a filename with spaces'
   new
-  edit tests/fixtures/a\ filename\ with\ spaces
-  let fname = expand('%')
+  let fname = neomake#utils#fname('tests', 'fixtures', 'a filename with spaces')
+  exe 'edit '.fnameescape(fname)
 
   call neomake#Make(1, [maker])
   NeomakeTestsWaitForFinishedJobs
@@ -47,10 +46,17 @@ Execute (fname in args gets not expanded (command maker, args as list)):
   new
   lcd tests/fixtures
   edit ~
+  AssertEqual bufname('%'), '~'
+  " XXX: '~' gets expanded to $HOME here on MSYS2 with Windows Vim (8.1.1).
+  AssertEqual fnamemodify('~', ':.'), '~'
   CallNeomake 1, [maker]
   AssertEqual map(getloclist(0), 'v:val.text'), ['~']
   if neomake#has_async_support()
-    AssertNeomakeMessage "Starting async job: printf '%s' '~'."
+    if neomake#utils#IsRunningWindows()
+      AssertNeomakeMessage 'Starting async job [string]: cmd.exe /s /c printf ""%"s" "~".', 3
+    else
+      AssertNeomakeMessage "Starting async job: printf '%s' '~'."
+    endif
   else
     AssertNeomakeMessage "Starting [string]: printf '%s' '~'."
   endif
@@ -67,13 +73,7 @@ Execute (fname in args gets not expanded (command maker, args as string)):
   edit ~
   CallNeomake 1, [maker]
   AssertEqual map(getloclist(0), 'v:val.text'), ['~']
-  if neomake#has_async_support()
-    if has('nvim')
-      AssertNeomakeMessage "Starting async job [string]: printf %s '~'."
-    endif
-  else
-    AssertNeomakeMessage "Starting [string]: printf %s '~'."
-  endif
+  AssertNeomakeMessage '\vStarting .*: .*printf .*\~'
   bwipe
 
 Execute (fname in args gets not expanded (maker from command string)):
@@ -86,7 +86,11 @@ Execute (fname in args gets not expanded (maker from command string)):
   AssertEqual map(getloclist(0), 'v:val.text'), ['~']
   let shell_argv = join(split(&shell) + split(&shellcmdflag))
   if neomake#has_async_support()
-    AssertNeomakeMessage "Starting async job: ".shell_argv." 'printf %s '\\''~'\\'''."
+    if neomake#utils#IsRunningWindows()
+      AssertNeomakeMessage 'Starting async job [string]: cmd.exe /s /c printf %s "~".', 3
+    else
+      AssertNeomakeMessage "Starting async job: ".shell_argv." 'printf %s '\\''~'\\'''."
+    endif
   else
     AssertNeomakeMessage "Starting [string]: ".shell_argv." 'printf %s '\\''~'\\'''."
   endif
@@ -101,7 +105,11 @@ Execute (fname in args gets not expanded (maker from command list)):
   CallNeomake 1, [maker]
   AssertEqual map(getloclist(0), 'v:val.text'), ['~']
   if neomake#has_async_support()
-    AssertNeomakeMessage "Starting async job: printf '%s' '~'."
+    if neomake#utils#IsRunningWindows()
+      AssertNeomakeMessage 'Starting async job [string]: cmd.exe /s /c printf ""%"s" "~".', 3
+    else
+      AssertNeomakeMessage "Starting async job: printf '%s' '~'."
+    endif
   else
     AssertNeomakeMessage "Starting [string]: printf '%s' '~'."
   endif
